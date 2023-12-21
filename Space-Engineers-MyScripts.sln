@@ -1,0 +1,26 @@
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.8.34330.188
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Supply-Chain", "Supply-Chain.csproj", "{22A06CCF-D6C2-441B-9B9B-6B165A5BFA8A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SamV2", "..\SamV2\SamV2\SamV2.csproj", "{6098FF18-71AF-46FA-BDA3-83F71F21F56F}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{22A06CCF-D6C2-441B-9B9B-6B165A5BFA8A}.Debug|x64.ActiveCfg = Debug|x64
+		{22A06CCF-D6C2-441B-9B9B-6B165A5BFA8A}.Debug|x64.Build.0 = Debug|x64
+		{6098FF18-71AF-46FA-BDA3-83F71F21F56F}.Debug|x64.ActiveCfg = Debug|x64
+		{6098FF18-71AF-46FA-BDA3-83F71F21F56F}.Debug|x64.Build.0 = Debug|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {BDBF3099-D727-43B9-92BA-9F85286B66F9}
+	EndGlobalSection
+EndGlobal
