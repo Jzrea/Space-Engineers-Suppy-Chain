@@ -1,4 +1,5 @@
 ﻿using Sandbox.Game.World;
+using Sandbox.ModAPI.Ingame;
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -17,18 +18,31 @@ namespace IngameScript
             public enum Status
             {
                 Idle,
-                Pending,
-                Fullfilled,
+                Assigned,
+                Loading,
+                Loaded,
+                Unloading,                
+                Intransit,
+                Delivered,
                 Failed,
             }
             public int ID { get;}
 
             public long Sender { get;}
             public long Reciever { get;}
-            public Order[] Orders { get; }
+            public Order[] Orders { get; set; }
             public Status State { get; set; }
-            public int? Expiry { get; set; }
-
+            public long? Expiry { private get; set; }
+            public bool? Urgent { get; }
+            public Transaction(long sender, long reciever, Order[] orders,bool urgent)
+            {
+                ID = GenerateRandomId();
+                Sender = sender;
+                Reciever = reciever;
+                Orders = orders;
+                State = Status.Idle;
+                Urgent = urgent;
+            }
             public Transaction(long sender, long reciever, Order[] orders)
             {                
                 ID = GenerateRandomId();
@@ -52,12 +66,18 @@ namespace IngameScript
             {
                 switch(str.ToLower())
                 {
-                    case "pending": return Status.Pending;
-                    case "fullfilled": return Status.Fullfilled;
+                    case "pending": return Status.Loading;
+                    case "fullfilled": return Status.Delivered;
                     case "failed": return Status.Failed;
                     default:
                         return Status.Idle;
                 }
+            }
+
+            public bool isExpired()
+            {
+                long now = DateTime.Now.Ticks;
+                return Expiry - now <= 0;
             }
 
             public override string ToString()
@@ -70,6 +90,23 @@ namespace IngameScript
                 return "["+string.Join(",\n", transactions.Select(transaction => transaction.ToString()).ToArray())+"]";
             }
 
+            //public static string StringifyTransactionIDs(Transaction[] transactions)
+            //{
+            //    return "[" + string.Join(",\n", transactions.Select(transaction => transaction.ID).ToArray()) + "]";
+            //}
+            //public static int[] ParseTransactionIDs(string str)
+            //{
+            //    if (string.IsNullOrEmpty(str)) return new int[0];
+            //    string content = str.Substring(str.IndexOf('[') + 1, str.LastIndexOf(']') - 1).Replace(",\n", ",");
+            //    string[] lines = Split(content);
+            //    int[] transactions = new int[lines.Length];
+            //    for (int i = 0; i < lines.Length; i++)
+            //    {
+            //        //Transaction newTransaction = new Transaction(lines[i]);
+            //        transactions[i] = int.Parse(lines[i]);
+            //    }
+            //    return transactions;
+            //}
             public static Transaction[] ParseTransactions(string str)
             {
                 if (string.IsNullOrEmpty(str)) return new Transaction[0];
@@ -105,6 +142,15 @@ namespace IngameScript
                 int randomId = dateTimeValue * 1000 + randomPart;
 
                 return randomId;
+            }
+
+            public static void updateTransaction(string data)
+            {
+                Transaction newTransaction = new Transaction(data);
+                IMyTextSurface screen = _p.Me.GetSurface(0);
+                Transaction[] transactions = ParseTransactions(screen.GetText());
+
+                screen.WriteText(StringifyTransactions(transactions.Append(newTransaction).ToArray()));
             }
         }
     }

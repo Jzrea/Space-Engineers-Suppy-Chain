@@ -1,6 +1,9 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text;
+using VRage.Game.ModAPI.Ingame;
+using VRage.Game.ObjectBuilders.Definitions;
 using VRageMath;
 
 namespace IngameScript
@@ -9,10 +12,11 @@ namespace IngameScript
     {
         class Order
         {
-            public string Name { get;}
+            public string Name { get; }
 
             public int Amount { get; set; }
 
+            public MyItemType Type { get; }
             public Order(string name, int amount)
             {
                 Name = name;

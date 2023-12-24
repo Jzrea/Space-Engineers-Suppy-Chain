@@ -5,14 +5,14 @@ namespace IngameScript
     partial class Program
     {
         
-        class NetworkClient
+        public class NetworkClient
 
         {
             public long ID { get;}
             public string Name { get; }
 
 
-            public Vector3D Position { get; }
+            public Vector3D? Position { get; }
             //public NetworkClient(){}
             public NetworkClient(long id, string name)
             {

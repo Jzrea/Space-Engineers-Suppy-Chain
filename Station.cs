@@ -33,6 +33,8 @@ namespace IngameScript
 {
     partial class Program
     {
+        public class Station
+        {
         public enum Response
         {
             subscribe,
@@ -41,17 +43,14 @@ namespace IngameScript
             item_available,
             item_reserved,
             acknowledged,
-            transaction
+            stationed,
+            dock_available
         }
-        public class Station
-        {
 
             string stationID = "setMyID";
             
             //MyIni myDataIni = new MyIni();
-            Vector3D myPosistion;
-            IMyUnicastListener myUnicastListener;
-            IMyBroadcastListener myBroadcastListener;
+            //Vector3D myPosistion;            
 
             List<IMyTerminalBlock> _containers = new List<IMyTerminalBlock>();
             //List<IMyTerminalBlock> _docks = new List<IMyTerminalBlock>();
@@ -64,11 +63,7 @@ namespace IngameScript
             #region Station_Setup
             public Station(List<IMyTerminalBlock> blocks)
             {                
-                myPosistion = _p.Me.CubeGrid.GetPosition();
-                myUnicastListener = _p.IGC.UnicastListener;
-                myUnicastListener.SetMessageCallback(CHANNELSTATION);
-                myBroadcastListener = _p.IGC.RegisterBroadcastListener(CHANNELSTATION);
-                myBroadcastListener.SetMessageCallback(CHANNELSTATION);
+                //myPosistion = _p.Me.CubeGrid.GetPosition();                
                 setup(blocks);
             }
 
@@ -122,6 +117,7 @@ namespace IngameScript
                             ((IMyShipConnector)block).IsConnected ? Dock.Status.Occupied : Dock.Status.Open,
                             block);
                         _docks[$"{block.BlockDefinition}"] = dock;
+                        block.CustomData = "SAM\n";
                     }
                     else if (_p.isContainer(block))
                     {
@@ -339,29 +335,13 @@ namespace IngameScript
             #endregion
 
             #region Actions
-            private bool subscribe(MyIGCMessage payload)
-            {
-                string gridName = _p.Me.CubeGrid.CustomName;
-                //myBroadcastListener.
-                _p.IGC.SendUnicastMessage(payload.Source, CHANNELSTATION, $"{Response.register}\n{gridName},{myPosistion}");
-                return true;
-            }
 
-            private bool register(MyIGCMessage payload)
-            {
-                string[] props = payload.Data.ToString().Replace($"{Response.register}\n", "").Split(',');                
-                Vector3D position;
-                Vector3D.TryParse(props[1], out position);
-                NetworkClient client = new NetworkClient(payload.Source, props[0], position);
-                subscribers[payload.Source] = client;
-                subscribers.OrderBy(subs => getDistance(myPosistion, subs.Value.Position));
-                return true;
-            }
+            #region STATION
             //Response to item_request
             private void sendAvailable(NetworkClient subcriber, string data)
             {
                 //panelCommsPrint("parsing");
-                List<Order> orders = Order.ParseOrders(data).ToList();                
+                List<Order> orders = Order.ParseOrders(data).ToList();
                 orders = orders.Where(order => {
                     ItemData item;
                     itemList.TryGetValue(order.Name, out item);
@@ -371,14 +351,14 @@ namespace IngameScript
                 {
                     string strOrders = Order.StringifyOrders(orders.ToArray());
                     _p.IGC.SendUnicastMessage(subcriber.ID, CHANNELSTATION, $"{Response.item_available}\n{strOrders}");
-                    panelCommsPrint($"\nto {subscribers[subcriber.ID].Name}: {Response.item_available}\n{strOrders}");
+                    panelCommsPrint($"\nto {subcriber.Name}: {Response.item_available}\n{strOrders}");
                 }
             }
 
-            private void sendReservations(NetworkClient subcriber,string data)
-            {                
+            private void sendReservations(NetworkClient subcriber, string data)
+            {
                 List<Order> available = Order.ParseOrders(data).ToList();
-                
+
                 available = available.Where(order => requests.Find(item => order.Name.Equals(item.Name)) != null).ToList();
                 available.ForEach(availableOrder => {
                     Order order = requests.Find(r => r.Name.Equals(availableOrder.Name));
@@ -387,10 +367,10 @@ namespace IngameScript
                         availableOrder.Amount = order.Amount;
                         requests.Remove(order);
                     }
-                    else if(order!=null)
+                    else if (order != null)
                     {
                         order.Amount -= availableOrder.Amount;
-                    }       
+                    }
                 });
                 if (!(available.Count > 0)) return;
                 string message = Order.StringifyOrders(available.ToArray());
@@ -402,22 +382,20 @@ namespace IngameScript
             private void sendAcknowledgement(NetworkClient subcriber, string data)
             {
                 Order[] orders = Order.ParseOrders(data);
-                for(int i = 0; i < orders.Length;i++)
+                for (int i = 0; i < orders.Length; i++)
                 {
-                    
+
                     ItemData item;
                     itemList.TryGetValue(orders[i].Name, out item);
-                    if(item != null) item.Reservations += orders[i].Amount;
+                    if (item != null) item.Reservations += orders[i].Amount;
                 }
-                Transaction transaction = new Transaction(_p.IGC.Me, subcriber.ID, orders);                
-                addTransaction(transaction.ToString());
+                Transaction transaction = new Transaction(_p.IGC.Me, subcriber.ID, orders);
+                Transaction.updateTransaction(transaction.ToString());
                 _p.IGC.SendUnicastMessage(subcriber.ID, CHANNELSTATION, $"{Response.acknowledged}\n{transaction}");
                 panelCommsPrint($"\n\\\\\\\\\\\\\\END TRANSACTION\\\\\\\\\\\\\\");
-                
+
                 //string message = $"pull\n{subcriber.ID}:{Order.StringifyOrders(orders)}";
-
-                //CHECK IF THERE IS DOCKED DRONE ON CURRENT GRID
-
+                
             }
 
             private void acknowledged(string data)
@@ -427,106 +405,79 @@ namespace IngameScript
                     itemList.TryGetValue(order.Name, out item);
                     if (item != null)
                         item.Requested += order.Amount;
-                    if(order.Amount<=0) requests.Remove(order);
+                    if (order.Amount <= 0) requests.Remove(order);
                 });
-                addTransaction(data);
+                Transaction.updateTransaction(data);
             }
 
-            private void addTransaction(string data)
-            {
-                Transaction newTransaction = new Transaction(data);
-                IMyTextSurface screen = _p.Me.GetSurface(0);
-                //panelCommsPrint("\nDEBUG:\n" + screen.GetText() + "\n");
-                Transaction[] transactions = Transaction.ParseTransactions(screen.GetText());
-
-                screen.WriteText(Transaction.StringifyTransactions( transactions.Append(newTransaction).ToArray() ) );
-            }
+            
             #endregion
 
-            #region Communications            
-            Dictionary<long, NetworkClient> subscribers = new Dictionary<long, NetworkClient>();
-            List<MyIGCMessage> unprocessedMessages = new List<MyIGCMessage>();
-
-            bool processMessages(string argument, MyIGCMessage payload)
-            {
-                string data = payload.Data.ToString();
-                //panelCommsPrint("\n"+data +"\n");
-                NetworkClient subcriber;                
-                if (data.Contains($"{Response.subscribe}")) subscribe(payload);
-                else if (data.Contains($"{Response.register}")) register(payload);
-
-
-                bool isSubscriber = subscribers.TryGetValue(payload.Source, out subcriber);
-                if (!isSubscriber)
+            #region SHIP
+            //private bool assigned;
+            private bool screenShip(NetworkClient subcriber, string data) {
+                Dictionary<string,Transaction> shipTransactions = Transaction.ParseTransactions(data).ToDictionary(kv => kv.ID.ToString(), kv => kv);
+                //assigned = false;
+                foreach (Transaction transaction in shipTransactions.Values)
                 {
-                    _p.IGC.SendUnicastMessage(payload.Source, CHANNELSTATION, $"{Response.subscribe}");
+                    if (transaction.Sender == _p.IGC.Me || transaction.Reciever == _p.IGC.Me) continue;
                     return false;
                 }
-                if(!data.Contains($"{Response.subscribe}") && !data.Contains($"{Response.register}")) panelCommsPrint($"\n{subcriber.Name}: {data}");
-                if (data.Contains($"{Response.item_request}")) sendAvailable(subcriber, data.Replace($"{Response.item_request}\n", ""));
-                else if (data.Contains($"{Response.item_available}")) sendReservations(subcriber, data.Replace($"{Response.item_available}\n", ""));
-                else if (data.Contains($"{Response.item_reserved}")) sendAcknowledgement(subcriber, data.Replace($"{Response.item_reserved}\n", ""));
-                else if (data.Contains($"{Response.acknowledged}")) acknowledged(data.Replace($"{Response.acknowledged}\n", ""));
-                //else if (data.Contains($"{Response.transaction}")) addTransaction(data.Replace($"{Response.transaction}\n", ""));
 
+                IMyTextSurface screen = _p.Me.GetSurface(0);
+                Dictionary<string, Transaction> stationTransactions = Transaction
+                    .ParseTransactions(screen.GetText()).ToDictionary(kv => kv.ID.ToString(), kv => kv); 
+                if (stationTransactions.Count <= 0) return false;
+                string key ="";
+                if (shipTransactions.Count<=0)
+                    key = stationTransactions.FirstOrDefault(kv=>kv.Value.State == Transaction.Status.Idle).Key;
+                else
+                {
+                    Transaction _;
+                    key = stationTransactions.FirstOrDefault(kv =>
+                    shipTransactions.TryGetValue(kv.Value.ID.ToString(), out _) == false &&
+                    kv.Value.State == Transaction.Status.Idle && (
+                    (shipTransactions.Values.First().Sender == kv.Value.Sender || shipTransactions.Values.First().Sender == kv.Value.Reciever) ||
+                    (shipTransactions.Values.First().Reciever == kv.Value.Sender || shipTransactions.Values.First().Reciever == kv.Value.Reciever))
+                    ).Key;
+                    //index = Array.IndexOf(stationTransactions, Array.Find(stationTransactions, elem => 
+                    
+                    //));
+                }
+                if(string.IsNullOrEmpty(key)) return false;
+                stationTransactions[key].State = Transaction.Status.Assigned;
+                _p.IGC.SendUnicastMessage(subcriber.ID, CHANNELSHIP, $"{Ship.Response.assign}\n{stationTransactions[key]}");                
+
+                screen.WriteText(Transaction.StringifyTransactions(stationTransactions.Values.ToArray()));
                 return true;
             }
 
-            public void communications(string argument)
+            private void sendMyId(long address)
             {
+                _p.IGC.SendUnicastMessage(address, CHANNELSHIP, $"{Response.stationed}\n{_p.IGC.Me}");
+            }
+            #endregion
+            #endregion
 
-                //panelCommsPrint("\n"+argument);
-                //if (updateSource != UpdateType.IGC) return;
-                try
-                {
-                    foreach (MyIGCMessage message in unprocessedMessages.ToList())
-                    {
-                        bool isProcessed = processMessages(argument,message);
-                        //isProcessed = processUnicastMessages(message, reserves, IGC);
-                        if (isProcessed) unprocessedMessages.Remove(message);
-                    }
-                    #region Broadcast Listener
-                    while (myBroadcastListener.HasPendingMessage)
-                    {
-                        MyIGCMessage payload = myBroadcastListener.AcceptMessage();
-                        if (payload.Tag != CHANNELSTATION) return;
-                        bool isProcessed = processMessages(argument, payload);
-                        if (!isProcessed && !unprocessedMessages.Exists(m => m.Data.ToString().Equals(payload.Data.ToString()))) unprocessedMessages.Add(payload);
-                    }
-                    //List<IMyBroadcastListener> listeners = new List<IMyBroadcastListener>();
-                    //_p.IGC.GetBroadcastListeners(listeners);
-                    //if (listeners.Count > 0)
-                    //{
-                    //    foreach (IMyBroadcastListener listener in listeners)
-                    //    {
+            #region Communications            
 
-                    //    }
-                    //}
-                    #endregion
-                    #region UNICAST LISTENER
-
-                    //IMyUnicastListener unicastListener = _p.IGC.UnicastListener;
-                    while (myUnicastListener.HasPendingMessage)
-                    {
-                        MyIGCMessage payload = myUnicastListener.AcceptMessage();
-
-                        bool isProcessed = processMessages(argument, payload);
-                        if (!isProcessed && !unprocessedMessages.Exists(m => m.Data.ToString().Equals(payload.Data.ToString()))) unprocessedMessages.Add(payload);
-                    }
-
-
-                    #endregion
-                }
-                catch (Exception ex)
-                {
-                    panelCommsPrint(ex.ToString());
-                }
+            public void dispatcher(NetworkClient client, string data)
+            {
+                if (data.Contains($"{Response.subscribe}") || data.Contains($"{Response.register}")) return;
+                panelCommsPrint($"\n{client.Name}: {data}");
+                //FROM OTHER STATION
+                if (data.Contains($"{Response.item_request}")) sendAvailable(client, data.Replace($"{Response.item_request}\n", ""));
+                else if (data.Contains($"{Response.item_available}")) sendReservations(client, data.Replace($"{Response.item_available}\n", ""));
+                else if (data.Contains($"{Response.item_reserved}")) sendAcknowledgement(client, data.Replace($"{Response.item_reserved}\n", ""));
+                else if (data.Contains($"{Response.acknowledged}")) acknowledged(data.Replace($"{Response.acknowledged}\n", ""));
+                //FROM SHIPS
+                else if (data.Contains($"{Ship.Response.status}")) if (!screenShip(client, data.Replace($"{Ship.Response.status}\n", ""))) _p.IGC.SendBroadcastMessage(CHANNELSHIP, $"{Ship.Response.hauler}\n{_p.IGC}");
+                else if (data.Contains($"{Response.stationed}")) sendMyId(client.ID);
             }
 
-            double getDistance(Vector3D gridA, Vector3D gridB)
-            {
-                return Vector3D.Distance(gridA, gridB);
-            }
+
+
+
 
             public void panelCommsPrint(string content)
             {
@@ -541,6 +492,41 @@ namespace IngameScript
             }
             #endregion
 
+
+            #region Logistics
+
+            private Transaction[] updateTransactionData()
+            {
+                IMyTextSurface screen = _p.Me.GetSurface(0);
+                Transaction[] transactions = Transaction.ParseTransactions(screen.GetText());
+                foreach (Transaction transaction in transactions)
+                {
+                    if (transaction.State == Transaction.Status.Loading && transaction.isExpired())
+                    {
+                        foreach (Order order in transaction.Orders)
+                        {
+                            ItemData item;
+                            if (itemList.TryGetValue(order.Name, out item) && transaction.Sender == _p.IGC.Me)
+                                item.Reservations -= order.Amount;
+                            else if (item != null)
+                                item.Requested -= order.Amount;
+                        }
+                        transaction.State = Transaction.Status.Failed;
+                    }
+
+                }
+                transactions = transactions.Where(transaction => transaction.State == Transaction.Status.Idle || transaction.State == Transaction.Status.Loading).ToArray();
+                screen.WriteText(Transaction.StringifyTransactions(transactions));
+                return transactions;
+            }
+
+            public void manageLogistics()
+            {
+                Transaction[] transactions =  updateTransactionData();
+                if (transactions.Length <= 0) return;
+                _p.transmitToAllConnectedGrid(CHANNELSHIP, Ship.Response.status.ToString(), "");
+            }
+            #endregion
             public string debug()
             {
                 return $@"Station {stationID}
@@ -551,6 +537,7 @@ Item Count {itemList.Count}
 Order Count {requests.Count}
 ";
             }
+
         }
     }
 }

@@ -10,6 +10,7 @@ using System.Collections.Immutable;
 using System.ComponentModel;
 using System.Linq;
 using System.Text;
+using System.Xml.Linq;
 using VRage;
 using VRage.Collections;
 using VRage.Game;
@@ -27,6 +28,23 @@ namespace IngameScript
 
         public class Ship 
         {
+            public enum Response
+            {
+                subscribe,
+                register,
+                status,
+                assign,
+                acknowledged,
+                hauler
+            }
+            public enum Status
+            {
+                idle,
+                charging,
+                loading,
+                unloading,
+                loaded
+            }
             //MyIni myDataIni = new MyIni();
 
             const string COMMAND = "START NEXT";
@@ -46,6 +64,8 @@ namespace IngameScript
             private bool isRefilling =true;
             private bool isCharging = false;
             /////////////PUBLIC////////////
+            public Status state = Status.idle;            
+            /////////////PRIVATE////////////
             private string shipID { get; set; } = "setMyID";
             private double shipEmptyMass { get; set; } = 0;
             private bool autoUnloadAll { get; set; } = false;
@@ -94,177 +114,155 @@ namespace IngameScript
                     //decryptList(myDataIni.Get(myData, "ShipQueue").ToString());
                 }
             }
-            /*
-            #region Communications            
-            Dictionary<long, NetworkClient> subscribers = new Dictionary<long, NetworkClient>();
-            int stationSubcriberCount = 0;
-            int shipSubcriberCount = 0;
-
-            public void communications(string argument, UpdateType updateSource, IMyIntergridCommunicationSystem IGC)
+            #region Actions
+            private void sendStatus(NetworkClient client)
             {
-                try
-                {
-                    #region LISTEN TO ALL
-                    List<IMyBroadcastListener> listeners = new List<IMyBroadcastListener>();
-                    IGC.GetBroadcastListeners(listeners);
-                    stationSubcriberCount = listeners.Where(lis => lis.Tag.Equals(CHANNELSTATION)).ToList().Count();
-                    shipSubcriberCount = listeners.Where(lis => lis.Tag.Equals(CHANNELSHIP)).ToList().Count();
-                    if (listeners.Count > 0)
+                if (state == Status.charging || state == Status.loaded) return;
+                IMyTextSurface screen = _p.Me.GetSurface(0);
+                _p.IGC.SendUnicastMessage(client.ID, CHANNELSTATION, $"{Response.status}\n{screen.GetText()}");
+            }            
+
+
+
+            #endregion
+            #region Communications            
+            public void dispatcher(NetworkClient client, string data)
+            {
+                //if (!data.Contains($"{Response.subscribe}") && !data.Contains($"{Response.register}"))
+                    //panelCommsPrint($"\n{client.Name}: {data}");
+
+                    if (data.Contains($"{Response.status}") || data.Contains($"{Response.hauler}")) sendStatus(client);
+                    else if (data.Contains($"{Response.assign}")) Transaction.updateTransaction(data.Replace($"{Response.assign}\n", ""));
+                    else if (data.Contains($"{Station.Response.stationed}")) dockedTo = long.Parse(data.Replace($"{Station.Response.stationed}\n", ""));
+            }
+            #endregion
+            //PULL - CARGO-IN
+            //PUSH - CARGO-OUT
+            long dockedTo = -1;
+            public void manangerTransactions()
+            {
+                if (((IMyShipConnector)myShipConnector).Status == MyShipConnectorStatus.Unconnected) return;
+                if (dockedTo == -1) {
+                    _p.transmitToAllConnectedGrid(CHANNELSTATION, Station.Response.stationed.ToString(), "");
+                    return;
+                };
+                IMyTextSurface screen = _p.Me.GetSurface(0);
+                Transaction[] transactions = Transaction.ParseTransactions(screen.GetText());
+                foreach (Transaction transaction in transactions){
+                    if (transaction.State == Transaction.Status.Loaded || transaction.State == Transaction.Status.Delivered || transaction.State == Transaction.Status.Failed) continue;
+                        if (transaction.Reciever == dockedTo)
                     {
-                        foreach (IMyBroadcastListener listener in listeners)
+                        transaction.Orders = cargo(Cargo.UNLOAD,transaction.Orders.ToDictionary(kv => kv.Name, kv => kv));
+                        transaction.State = Transaction.Status.Unloading;
+                        if (transaction.Orders.Length<=0) transaction.State = Transaction.Status.Delivered;
+                        else transaction.State = Transaction.Status.Unloading;
+                    }
+                    else if (transaction.Sender == dockedTo) {
+                        bool loaded = cargo(Cargo.LOAD,transaction.Orders.ToDictionary(kv => kv.Name, kv => kv)).Length <= 0;
+                        if (loaded) transaction.State = Transaction.Status.Loaded;
+                        else transaction.State = Transaction.Status.Loading;
+                    }
+                }
+                screen.WriteText(Transaction.StringifyTransactions(transactions)); 
+            }
+            enum Cargo
+            {
+                LOAD,
+                UNLOAD
+            }
+            public void deliver()
+            {
+                if (((IMyShipConnector)myShipConnector).Status == MyShipConnectorStatus.Unconnected) return;
+                IMyTextSurface screen = _p.Me.GetSurface(0);
+                Transaction[] transactions = Transaction.ParseTransactions(screen.GetText());
+                foreach (Transaction transaction in transactions)
+                {
+                    if (transaction.State == Transaction.Status.Loaded || transaction.State == Transaction.Status.Delivered) continue;
+                    return;
+                }
+                _p.IGC.SendUnicastMessage(Array.Find(transactions,t=>t.Reciever!=dockedTo).Reciever, CHANNELSTATION, $"{Station.Response.dock_available}\n");
+            }
+
+            private Order[] cargo(Cargo method,Dictionary<string,Order> orders)
+            {
+                List<IMyTerminalBlock> containers = _p.getOffGridBlocks();
+
+                _containers.ForEach(container =>
+                {
+                    if (((IMyCargoContainer)container).InventoryCount > 0)
+                    {
+
+                        containers.ForEach(OGContainer =>
                         {
-                            while (listener.HasPendingMessage)
+                            List<MyInventoryItem> items = new List<MyInventoryItem>();
+                            ((IMyCargoContainer)OGContainer).GetInventory().GetItems(items, item =>
                             {
-                                MyIGCMessage payload = listener.AcceptMessage();
-                                string data = payload.Data.ToString();
-                                NetworkClient subcriber;
-                                subscribers.TryGetValue(payload.Source, out subcriber);
-                                if (subcriber != null)
-                                    panelCommsPrint($"\n{subcriber.Name}: {data}");
-
-                                if (data.Contains(subscribe.ToLower()))
+                                string itemName = item.Type.SubtypeId.Trim();
+                                itemName = (item.Type ==
+                                    MyItemType.MakeIngot(item.Type.SubtypeId)) ? "Ingot_" + itemName :
+                                    (item.Type == MyItemType.MakeOre(item.Type.SubtypeId) && !itemName.Equals("Ice")) ? "Ore_" + itemName : itemName;
+                                Order _;
+                                return orders.TryGetValue(itemName, out _);
+                            });
+                            foreach (MyInventoryItem item in items)
+                            {
+                                if (((IMyCargoContainer)container).GetInventory().CanTransferItemTo(((IMyCargoContainer)OGContainer).GetInventory(), item.Type))
                                 {
-                                    string gridName = _p.Me.CubeGrid.CustomName;
-                                    IGC.SendUnicastMessage(payload.Source, CHANNELSTATION, $"{register}{gridName},{myPosistion}");
-                                }
-                                else if (data.Contains(itemRequest.ToLower()))
-                                {
-                                    List<Order> orders = _p.deserializeOrders(data.Replace(itemRequest, ""));
-                                    orders = orders.Where(order => itemList.Find(item => order.Name.Equals(item.Name)) != null).ToList();
-                                    List<Order> export = new List<Order>();
-                                    orders.ForEach(order =>
+                                    string itemName = item.Type.SubtypeId.Trim();
+                                    itemName = (item.Type ==
+                                        MyItemType.MakeIngot(item.Type.SubtypeId)) ? "Ingot_" + itemName :
+                                        (item.Type == MyItemType.MakeOre(item.Type.SubtypeId) && !itemName.Equals("Ice")) ? "Ore_" + itemName : itemName;
+                                    Order order;
+                                    if (!orders.TryGetValue(itemName, out order)) continue;
+                                    int allowance = ((IMyCargoContainer)OGContainer).GetInventory().MaxVolume.ToIntSafe() - ((IMyCargoContainer)OGContainer).GetInventory().CurrentVolume.ToIntSafe();
+                                    if (item.Amount.ToIntSafe() >= order.Amount && allowance >= order.Amount)
                                     {
-                                        ItemData item = itemList.Find(itm => itm.Name.Equals(order.Name));
-                                        if (item.isOkayForExport())
-                                        {
-                                            int orderAmount = item.Supply - ((item.Low > 0) ? item.Low : 0);
-                                            Order newOrder = new Order(order.Name, orderAmount);
-                                            export.Add(newOrder);
-                                            item.Reserves = orderAmount;
-                                        };
-
-                                    });
-
-                                    if (export.Count > 0)
+                                        if (method == Cargo.UNLOAD) {
+                                            transferItem(
+                                                ((IMyCargoContainer)container).GetInventory(),
+                                                ((IMyCargoContainer)OGContainer).GetInventory(),
+                                                item, order.Amount
+                                                );
+                                        }
+                                        else transferItem(
+                                            ((IMyCargoContainer)OGContainer).GetInventory(),
+                                            ((IMyCargoContainer)container).GetInventory(),
+                                            item, order.Amount
+                                            );
+                                        orders.Remove(itemName);
+                                    }
+                                    else
                                     {
-                                        IGC.SendUnicastMessage(payload.Source, CHANNELSTATION, $"{itemAvailable}\n{_p.serializeOrders(export)}");
-                                        panelCommsPrint($"\nto {subscribers[payload.Source].Name}: {itemAvailable}\n{_p.serializeOrders(export)}");
+                                        int amount = item.Amount.ToIntSafe() >= allowance ? item.Amount.ToIntSafe() : allowance;
+                                        if (method == Cargo.UNLOAD) transferItem(
+                                            ((IMyCargoContainer)container).GetInventory(),
+                                            ((IMyCargoContainer)OGContainer).GetInventory(),
+                                            item, amount
+                                            );
+                                        else
+                                            transferItem(
+                                            ((IMyCargoContainer)OGContainer).GetInventory(),
+                                            ((IMyCargoContainer)container).GetInventory(),
+                                            item, amount
+                                            );
+                                        order.Amount = Math.Abs(amount - order.Amount);
+                                        if(order.Amount<=0) orders.Remove(itemName);
                                     }
                                 }
                             }
-                        }
+                        });
                     }
-                    #endregion
-                    #region Listen To Addressed 
-                    IMyUnicastListener unicastListener = IGC.UnicastListener;
-                    //Dictionary<long, > distributors = new Dictionary<long, int>();
-                    List<Order> reserves = imports.ToList();
-                    while (unicastListener.HasPendingMessage)
-                    {
-                        MyIGCMessage payload = unicastListener.AcceptMessage();
-                        string data = payload.Data.ToString();
-                        NetworkClient subcriber;
-                        subscribers.TryGetValue(payload.Source, out subcriber);
-                        if (subcriber != null)
-                            panelCommsPrint($"\n{subcriber.Name}: {data}");
-                        if (data.Contains(register.ToLower()) && !subscribers.TryGetValue(payload.Source, out subcriber))
-                        {
-                            string[] props = payload.Data.ToString().Replace(register, "").Split(',');
-                            NetworkClient client = new NetworkClient();
-                            client.Name = props[0];
-                            Vector3D position;
-                            Vector3D.TryParse(props[1], out position);
-                            client.Position = position;
-                            subscribers.Add(payload.Source, client);
-                        }
-                        else if (data.Contains(itemAvailable.ToLower()))
-                        {
-                            List<Order> orders = _p.deserializeOrders(data.Replace(itemAvailable, ""));
-                            orders = orders.Where(order => reserves.Find(item => order.Name.Equals(item.Name)) != null).ToList();
-                            orders.ForEach(order => {
-                                Order item = reserves.Find(r => r.Name.Equals(order.Name));
-                                item.Amount -= order.Amount;
-                                if (item.Amount <= 0)
-                                {
-                                    if (item.Amount < 0) order.Amount += item.Amount;
-                                    reserves.Remove(item);
-                                };
-                            });
-                            string message = _p.serializeOrders(orders);
-                            IGC.SendUnicastMessage(payload.Source, CHANNELSTATION, $"{itemReserve}\n{message}");
-                            subscribers.TryGetValue(payload.Source, out subcriber);
-                            panelCommsPrint($"\nto {subcriber.Name}: {itemReserve}\n{message}");
-
-                        }
-                        else if (data.Contains(itemReserve.ToLower()))
-                        {
-                            List<Order> orders = _p.deserializeOrders(data.Replace(itemReserve, ""));
-                            orders.ForEach(order => {
-                                ItemData item = itemList.Find(import => import.Name.Equals(order.Name));
-                                item.Reserves = order.Amount;
-                            });
-                            IGC.SendUnicastMessage(payload.Source, CHANNELSTATION, $"{acknowledged}");
-                            panelCommsPrint($"\\\\\\\\\\\\\\END TRANSACTION\\\\\\\\\\\\\\");
-                            string message = $"pull\n{payload.Source}:{_p.serializeOrders(orders)}";
-                            if (shipSubcriberCount > 0)
-                            {
-                                long ship = listeners.Where(lis => lis.Tag.Equals(CHANNELSHIP)).ToList()[0].AcceptMessage().Source;
-                                IGC.SendUnicastMessage(ship, CHANNELSHIP, message);
-
-                            }
-                            else
-                                exports.Add(message);
-                        }
-                        else if (data.Contains(acknowledged.ToLower()))
-                        {
-                            if (reserves.Count <= 0) panelCommsPrint($"\\\\\\\\\\\\\\END TRANSACTION\\\\\\\\\\\\\\");
-
-                        }
-                    }
-
-                    if (subscribers.Count != stationSubcriberCount)
-                    {
-                        IGC.SendBroadcastMessage(CHANNELSTATION, subscribe);
-                        subscribers.OrderBy(sub => getDistance(myPosistion, sub.Value.Position));
-                        panelCommsPrint($"\nto all: {subscribe}");
-                    }
-                    #endregion                    
-                }
-                catch (Exception ex)
-                {
-                    panelCommsPrint(ex.ToString());
-                }
+                });
+                return orders.Values.ToArray();
             }
 
-            double getDistance(Vector3D gridA, Vector3D gridB)
+            public void unloadCargo()
             {
-                return Vector3D.Distance(gridA, gridB);
-            }
+                List<IMyTerminalBlock> containers = _p.getOffGridBlocks();
 
-            public void panelCommsPrint(string content)
-            {
-                foreach (IMyTextPanel panel in _textPanels)
-                {
-                    if (panel.CustomName.ToLower().Contains("[comms]"))
-                    {
-                        //panel.WriteText($"\nsent to: {address}", true);
-                        panel.WriteText(content, true);
-                    }
-                }
-            }
-            #endregion*/
-            private void despositCargo()
-            {
-                
-            }
-
-            private void withdrawCargo()
-            {
-                List<IMyTerminalBlock> containers = _p.getOffGridBlocks();  
-                
                 _containers.ForEach(container =>
                 {
-                    if (((IMyCargoContainer)container).InventoryCount>0)
+                    if (((IMyCargoContainer)container).InventoryCount > 0)
                     {
 
                         containers.ForEach(OGContainer =>
@@ -276,6 +274,11 @@ namespace IngameScript
                         });
                     }
                 });
+            }
+
+            private void transferItem(IMyInventory src, IMyInventory dst, MyInventoryItem item,int amount)
+            {
+                src.TransferItemTo(dst,item, amount);
             }
 
             private void transferEverything(IMyInventory src, IMyInventory dst)
@@ -302,9 +305,7 @@ namespace IngameScript
                 currentLoad = GetPercentUsage();
                 currentMass = getWeightUsage();
                 if (((IMyShipConnector)myShipConnector).Status == MyShipConnectorStatus.Connected)
-                {
-                    
-
+                {                    
                     if (!isCharging) {
                         iterateRoute();
                         isCharging = recharge();
@@ -319,8 +320,7 @@ namespace IngameScript
                         case 1:
                             break; 
                         case 2:
-                            if (!autoUnloadAll) break;
-                            withdrawCargo();
+                            if (!autoUnloadAll) break;                            
                             break; 
                         case 3: 
                             break; 
@@ -329,16 +329,18 @@ namespace IngameScript
                     }
                     if ((aboveTreshold && route == 0) || (currentLoad <= 0 && route == 2 && loop))
                     {
-                        if(!isRefilling && getFuelPercentUsage()>= fuelMinimum)
+                        if (!isRefilling && getFuelPercentUsage() >= fuelMinimum) { 
                             nextPort();
-                        else
+                            dockedTo = -1;
+                    }
+                    else
+                    {
+                        isRefilling = getFuelPercentUsage() < 100;
+                        if (isRefilling)
                         {
-                            isRefilling = getFuelPercentUsage() < 100;
-                            if (isRefilling)
-                            {
-                                recharge();
-                            }
+                            recharge();
                         }
+                    }
                     }
                 }
             }
