@@ -9,4 +9,4 @@ a Space Engineers ingame-script where it handles station logistics.
   - (tested) overweight prevention (based how max lift capacity; thrusters facing downwards)
 
 ## License
-[Apache License Version 2.0](LICENSE)
+[GNU GENERAL PUBLIC LICENSE Version 3](LICENSE)
